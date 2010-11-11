@@ -6,17 +6,17 @@
 
 	Copyright (C) 2010  Nicholas J. Humfrey
   Copyright (C) 2005  Daniel Clement
-	
+
 	This program is free software; you can redistribute it and/or
 	modify it under the terms of the GNU General Public License
 	as published by the Free Software Foundation; either version 2
 	of the License, or (at your option) any later version.
-	
+
 	This program is distributed in the hope that it will be useful,
 	but WITHOUT ANY WARRANTY; without even the implied warranty of
 	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 	GNU General Public License for more details.
-	
+
 	You should have received a copy of the GNU General Public License
 	along with this program; if not, write to the Free Software
 	Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
@@ -29,19 +29,23 @@
 #include <termios.h>
 #include <string.h>
 #include <sys/fcntl.h>
+#include <getopt.h>
 
 #include <lo/lo.h>
+#include "config.h"
 
 
-#define K8056_BAUDRATE    B2400
-#define K8056_ATTEMPTS    (6)
-
+#define K8056_BAUDRATE         B2400
+#define K8056_ATTEMPTS         (6)
+#define K8056_DEFAULT_DEVICE   "/dev/k8056"
+#define K8056_DEFAULT_OSC_PORT "8056"
 
 
 /* Global Variables */
 int keep_running = 1;
 struct	termios oldtio, newtio;
 int serial_port = -1;
+int verbose = 0;
 
 
 static
@@ -51,7 +55,7 @@ int open_serial(const char* device)
 	if (fh < 0)
  	{
  		fprintf(stderr, "Error opening device %s.\n", device) ;
-		exit(-1);
+		return -1;
 	}
  	tcgetattr(fh, &oldtio); 		/* save current port settings */
 
@@ -63,7 +67,7 @@ int open_serial(const char* device)
 
  	tcflush(fh, TCOFLUSH);		/* Flushes written but not transmitted. */
  	tcsetattr(fh, TCSANOW, &newtio);
- 	
+
  	return fh;
 }
 
@@ -98,19 +102,19 @@ int send_command(int port, unsigned char address, unsigned char instruction, uns
 	cmd[3] = value;
 	cmd[4] = k8056_checksum(cmd);
 
-  printf("Sending: 0x%2.2x 0x%2.2x 0x%2.2x 0x%2.2x 0x%2.2x\n",
-         cmd[0], cmd[1], cmd[2], cmd[3], cmd[4]);
-	
-	
+  if (verbose)
+      printf("Sending: 0x%2.2x 0x%2.2x 0x%2.2x 0x%2.2x 0x%2.2x\n",
+             cmd[0], cmd[1], cmd[2], cmd[3], cmd[4]);
+
 	/* Flushes written but not transmitted. */
 	tcflush(port, TCOFLUSH);
-	
+
 	for (i=0; i < K8056_ATTEMPTS; i++)
 	{
 		write(port, cmd, 5) ;
 		usleep(5000) ;
 	}
-	
+
 	// Success
 	return 0;
 }
@@ -132,7 +136,7 @@ void termination_handler(int signum)
       case SIGTERM: fprintf(stderr, "osc2k8062: Received SIGTERM, exiting.\n"); break;
       case SIGINT:  fprintf(stderr, "osc2k8062: Received SIGINT, exiting.\n"); break;
     }
-  
+
     keep_running = 0;
 }
 
@@ -140,6 +144,7 @@ static
 int osc_set(const char *path, const char *types, lo_arg **argv, int argc,
 		 void *data, void *user_data)
 {
+    printf("Setting card %d to 0x%2.2x.\n", argv[0]->i, argv[1]->i);
     return send_command(serial_port, argv[0]->i, 'B', argv[1]->i);
 }
 
@@ -148,9 +153,12 @@ int osc_set_relay(const char *path, const char *types, lo_arg **argv, int argc,
 		 void *data, void *user_data)
 {
     unsigned char relay = k8056_relay_code(argv[1]->i);
-    if (relay)
-        send_command(serial_port, argv[0]->i, 'S', argv[1]->i);
-    return 1;
+    int card = argv[0]->i;
+    if (relay) {
+        printf("Setting relay %c on card %d.\n", relay, card);
+        send_command(serial_port, card, 'S', relay);
+    }
+    return 0;
 }
 
 static
@@ -158,9 +166,12 @@ int osc_clear_relay(const char *path, const char *types, lo_arg **argv, int argc
 		 void *data, void *user_data)
 {
     unsigned char relay = k8056_relay_code(argv[1]->i);
-    if (relay)
-        send_command(serial_port, argv[0]->i, 'C', relay);
-    return 1;
+    int card = argv[0]->i;
+    if (relay) {
+        printf("Clearing relay %c on card %d.\n", relay, card);
+        send_command(serial_port, card, 'C', relay);
+    }
+    return 0;
 }
 
 static
@@ -168,41 +179,48 @@ int osc_toggle_relay(const char *path, const char *types, lo_arg **argv, int arg
 		 void *data, void *user_data)
 {
     unsigned char relay = k8056_relay_code(argv[1]->i);
-    if (relay)
-        send_command(serial_port, argv[0]->i, 'T', relay);
-    return 1;
+    int card = argv[0]->i;
+    if (relay) {
+        printf("Toggling relay %c on card %d.\n", relay, card);
+        send_command(serial_port, card, 'T', relay);
+    }
+    return 0;
 }
 
 static
 int osc_emergency_stop(const char *path, const char *types, lo_arg **argv, int argc,
 		 void *data, void *user_data)
 {
+    printf("Emergency stop.\n");
     send_command(serial_port, 0, 'E', 0);
-    return 1;
+    return 0;
 }
 
 static
 int osc_display_address(const char *path, const char *types, lo_arg **argv, int argc,
 		 void *data, void *user_data)
 {
+    printf("Setting relays to card address.\n");
     send_command(serial_port, 0, 'D', 0);
-    return 1;
+    return 0;
 }
 
 static
 int osc_set_address(const char *path, const char *types, lo_arg **argv, int argc,
 		 void *data, void *user_data)
 {
+    printf("Setting card address to %d to %d.\n", argv[0]->i, argv[1]->i);
     send_command(serial_port, argv[0]->i, 'T', argv[1]->i);
-    return 1;
+    return 0;
 }
 
 static
 int osc_reset_address(const char *path, const char *types, lo_arg **argv, int argc,
 		 void *data, void *user_data)
 {
+    printf("Forcing all cards address to 1.\n");
     send_command(serial_port, 0, 'A', argv[0]->i);
-    return 1;
+    return 0;
 }
 
 static
@@ -216,12 +234,12 @@ int osc_wildcard(const char *path, const char *types, lo_arg **argv, int argc,
 		 lo_message msg, void *user_data)
 {
     fprintf(stderr, "Warning: unhandled OSC message: '%s' with args '%s'.\n", path, types);
-    return 1;
+    return 0;
 }
 
 
 static
-lo_server start_server(char* port)
+lo_server start_server(const char* port)
 {
     lo_server s = lo_server_new(port, osc_error);
     if (!s) {
@@ -229,9 +247,9 @@ lo_server start_server(char* port)
         keep_running = 0;
         return NULL;
     }
-    
+
     printf("Started server on port %d.\n", lo_server_get_port(s));
-    
+
     lo_server_add_method(s, "/k8056/set", "ii", osc_set, NULL);
     lo_server_add_method(s, "/k8056/set_relay", "ii", osc_set_relay, NULL);
     lo_server_add_method(s, "/k8056/clear_relay", "ii", osc_clear_relay, NULL);
@@ -240,21 +258,47 @@ lo_server start_server(char* port)
     lo_server_add_method(s, "/k8056/display_address", "", osc_display_address, NULL);
     lo_server_add_method(s, "/k8056/set_address", "i", osc_set_address, NULL);
     lo_server_add_method(s, "/k8056/reset_address", "", osc_reset_address, NULL);
-  
+
     // add method that will match any path and args
     lo_server_add_method(s, NULL, NULL, osc_wildcard, NULL);
-    
+
     return s;
 }
 
-int main() {
+static
+void usage()
+{
+    printf("%s version %s\n\n", PACKAGE_NAME, PACKAGE_VERSION);
+    printf("Usage: %s [options]\n", PACKAGE_NAME);
+    printf("   -d <device>   Path to serial port device (default %s)\n", K8056_DEFAULT_DEVICE);
+    printf("   -p <port>     The port number to listen on (default %s)\n", K8056_DEFAULT_OSC_PORT);
+    printf("   -h            Display this message\n");
+    printf("   -v            Enable verbose mode\n");
+    exit(-1);
+}
+
+int main(int argc, char *argv[])
+{
+    const char* device = K8056_DEFAULT_DEVICE;
+    const char* osc_port = K8056_DEFAULT_OSC_PORT;
     lo_server server = NULL;
-    const char* device = "/dev/k8056";
+    int opt;
 
     /* Make stdout unbuffered for logging/debugging */
-    setvbuf(stdout, 0, _IONBF, 0);
+    setbuf(stdout, NULL);
 
-    printf("Opening serial port: %s\n", device);
+    // Parse Switches
+    while ((opt = getopt(argc, argv, "d:p:vh")) != -1) {
+      switch (opt) {
+        case 'd':  device = optarg; break;
+        case 'p':  osc_port = optarg; break;
+        case 'v':  verbose = 1; break;
+        default:   usage(); break;
+      }
+    }
+
+    if (verbose)
+        printf("Opening serial port: %s\n", device);
     serial_port = open_serial(device);
     if (serial_port < 0) {
         fprintf(stderr, "Failed to open serial port.\n");
@@ -263,7 +307,7 @@ int main() {
     }
 
     /* OSC server failed? */
-    server = start_server("8056");
+    server = start_server(osc_port);
     if (server == NULL) {
         fprintf(stderr, "Failed to start OSC server.\n");
         return -1;
@@ -282,6 +326,6 @@ int main() {
     /* Clean up */
     close_serial(serial_port);
     lo_server_free(server);
-    
+
     return 0;
 }
